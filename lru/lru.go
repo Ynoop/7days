@@ -34,6 +34,7 @@ func New(maxEntries int) *Cache {
 		ll:    list.New(),
 		cache: make(map[interface{}]*list.Element),
 	}
+
 }
 
 // 增加新元素
