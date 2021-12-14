@@ -5,18 +5,23 @@
 // LRU 算法本质是使用一个hash table 维护缓存内容，
 //     使用一个列队维护缓存使用的频率。
 //     当缓存使用数到达最大时，将弹出队首元素，并删除hash table 中的缓存内容。
-// 这里把队首作为最近最少使用，队尾作为最近经常使用
+// 这里把表尾作为最近最少使用，表首作为最近经常使用
 package lru
 
-import "container/list"
+import (
+	"container/list"
+)
 
 type Cache struct {
+	// 最大实例个数
 	MaxEntries int
 
+	// 双向链表用以存储每个缓存最近使用频率，表尾为最近最少使用，表首为最近最多使用
 	ll *list.List
 
 	cache map[interface{}]*list.Element
 
+	// 回调函数，当缓存被销魂是执行
 	OnEvicted func(key Key, value interface{})
 }
 
@@ -31,10 +36,10 @@ type entry struct {
 // 创建一个新的缓存
 func New(maxEntries int) *Cache {
 	return &Cache{
-		ll:    list.New(),
-		cache: make(map[interface{}]*list.Element),
+		MaxEntries: maxEntries,
+		ll:         list.New(),
+		cache:      make(map[interface{}]*list.Element),
 	}
-
 }
 
 // 增加新元素
@@ -47,19 +52,19 @@ func (c *Cache) Add(key Key, value interface{}) {
 
 	// 判断当前key是否存在
 	if ee, ok := c.cache[key]; ok {
-		// 把当前元素移动至队尾
-		c.ll.MoveToBack(ee)
+		// 把当前元素移动至表首
+		c.ll.MoveToFront(ee)
 		// 修改缓存内容
 		ee.Value.(*entry).value = value
 		return
 	}
 
-	// 把元素加入到队尾
+	// 把元素加入到表首
 	ele := c.ll.PushBack(&entry{key, value})
 	c.cache[key] = ele
 
 	// 判断是否到达缓存最大值
-	if c.MaxEntries != 0 && c.MaxEntries > c.ll.Len() {
+	if c.MaxEntries != 0 && c.MaxEntries < c.ll.Len() {
 		c.RemoveOldest()
 	}
 }
@@ -70,8 +75,8 @@ func (c *Cache) RemoveOldest() {
 		return
 	}
 
-	// 找到队首的第一个元素
-	ele := c.ll.Front()
+	// 找到表尾的第一个元素
+	ele := c.ll.Back()
 	c.removeElement(ele)
 }
 
@@ -82,8 +87,8 @@ func (c *Cache) Get(key Key) (value interface{}, ok bool) {
 	}
 
 	if ele, hit := c.cache[key]; hit {
-		// 把当前元素移动至表尾
-		c.ll.MoveToBack(ele)
+		// 把当前元素移动至表首
+		c.ll.MoveToFront(ele)
 
 		return ele.Value.(*entry).value, true
 	}
