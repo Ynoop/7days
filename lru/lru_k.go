@@ -1,36 +1,38 @@
 package lru
 
-import "container/list"
+import (
+	"container/list"
+)
 
 // 实现LRU-K算法
 // LRU-K 算法解决“缓存污染问题” 核心思想为命中1次改为命中k次
 
 type LRUKCache struct {
-	maxEntires         int                            // 缓存最大上限
-	OnEvicted          func(key Key, val interface{}) // 销毁时回调事件
-	k                  int                            // 缓存命中的次数
-	templateMaxEntires int                            // 临时最大上限
-	template           *list.List                     // 临时双向列表
-	templateHash       map[interface{}]*list.Element  // 临时缓存hash表
-	ll                 *list.List                     // 缓存双向列表
-	cache              map[interface{}]*list.Element  // 缓存hash表
+	maxEntires          int                            // 缓存最大上限
+	OnEvicted           func(key Key, val interface{}) // 销毁时回调事件
+	k                   int                            // 缓存命中的次数
+	temporaryMaxEntires int                            // 临时最大上限
+	temporary           *list.List                     // 临时双向列表
+	temporaryHash       map[interface{}]*list.Element  // 临时缓存hash表
+	ll                  *list.List                     // 缓存双向列表
+	cache               map[interface{}]*list.Element  // 缓存hash表
 }
 
 // 临时数据命中次数
-type templateCount struct {
+type temporaryCount struct {
 	visited int
 	entry
 }
 
 func NewLRUKCache(maxEntires int, k int) *LRUKCache {
 	return &LRUKCache{
-		maxEntires:         maxEntires,
-		k:                  k,
-		templateMaxEntires: maxEntires,
-		template:           list.New(),
-		ll:                 list.New(),
-		templateHash:       make(map[interface{}]*list.Element),
-		cache:              make(map[interface{}]*list.Element),
+		maxEntires:          maxEntires,
+		k:                   k,
+		temporaryMaxEntires: maxEntires,
+		temporary:           list.New(),
+		ll:                  list.New(),
+		temporaryHash:       make(map[interface{}]*list.Element),
+		cache:               make(map[interface{}]*list.Element),
 	}
 }
 
@@ -43,8 +45,8 @@ func (c *LRUKCache) Add(key Key, value interface{}) {
 		c.ll = list.New()
 		c.cache = make(map[interface{}]*list.Element)
 
-		c.template = list.New()
-		c.templateHash = make(map[interface{}]*list.Element)
+		c.temporary = list.New()
+		c.temporaryHash = make(map[interface{}]*list.Element)
 	}
 
 	// 判断当前key是否存在
@@ -58,42 +60,33 @@ func (c *LRUKCache) Add(key Key, value interface{}) {
 	}
 
 	// 如果缓存不存在的情况，先将缓存放入临时数据中
-	c.addToTemplate(key, value)
+	c.addToTemporary(key, value)
 }
 
 // 加入临时数据中
-func (c *LRUKCache) addToTemplate(key Key, value interface{}) {
-	var tc *templateCount
+func (c *LRUKCache) addToTemporary(key Key, value interface{}) {
+	var tc *temporaryCount
+
 	// 判断临时数据是否存在该元素
-	if ele, ok := c.templateHash[key]; ok {
-		tc = ele.Value.(*templateCount)
-		tc.visited++
-
-		// 判断临时数据是否到达K次
-		if tc.visited >= c.k {
-			// 移除临时数据
-			c.removeTemplate(ele)
-
-			// 加入到cache中
-			c.addToCache(key, value)
-			return
-		}
+	if ele, ok := c.temporaryHash[key]; ok {
+		tc = ele.Value.(*temporaryCount)
+		tc.entry.value = value
 
 		ele.Value = tc
 	} else {
 		// 检查数据是否已经存满
-		c.templateChecking()
+		c.temporaryChecking()
 		// 加入到临时数据中
-		tc = &templateCount{
-			visited: 1,
+		tc = &temporaryCount{
+			visited: 0,
 			entry: entry{
 				key:   key,
 				value: value,
 			},
 		}
 
-		ee := c.template.PushBack(tc)
-		c.templateHash[key] = ee
+		ee := c.temporary.PushBack(tc)
+		c.temporaryHash[key] = ee
 	}
 
 	return
@@ -130,19 +123,19 @@ func (c *LRUKCache) removeElement(ele *list.Element) {
 }
 
 // 临时表最大长度检查
-func (c *LRUKCache) templateChecking() {
-	if c.templateMaxEntires > c.template.Len() {
-		ele := c.template.Back()
-		c.removeTemplate(ele)
+func (c *LRUKCache) temporaryChecking() {
+	if c.temporaryMaxEntires < c.temporary.Len() {
+		ele := c.temporary.Back()
+		c.removeTemporary(ele)
 	}
 }
 
 // 移除临时表内容
-func (c *LRUKCache) removeTemplate(ele *list.Element) {
+func (c *LRUKCache) removeTemporary(ele *list.Element) {
 	// 删除表尾数据
-	c.template.Remove(ele)
-	kv := ele.Value.(*templateCount)
-	delete(c.templateHash, kv.entry.key)
+	c.temporary.Remove(ele)
+	kv := ele.Value.(*temporaryCount)
+	delete(c.temporaryHash, kv.entry.key)
 }
 
 // 获取缓存内容
@@ -155,21 +148,21 @@ func (c *LRUKCache) Get(key Key) (value interface{}, ok bool) {
 		return ele.Value.(*entry).value, hit
 	}
 
-	// 在template中访问
-	if ele, hit := c.templateHash[key]; hit {
-		tc := ele.Value.(*templateCount)
+	// 在temporary中访问
+	if ele, hit := c.temporaryHash[key]; hit {
+		tc := ele.Value.(*temporaryCount)
 		tc.visited++
 
 		// 判断临时数据是否到达K次
 		if tc.visited >= c.k {
 			// 移除临时数据
-			c.removeTemplate(ele)
+			c.removeTemporary(ele)
 
 			// 加入到cache中
-			c.addToCache(key, value)
+			c.addToCache(key, tc.entry.value)
 		}
 
-		return ele.Value.(*templateCount).entry.value, hit
+		return ele.Value.(*temporaryCount).entry.value, hit
 	}
 
 	return nil, false
