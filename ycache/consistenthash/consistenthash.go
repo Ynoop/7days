@@ -40,6 +40,7 @@ func (m *Map) Add(keys ...string) {
 			// 创建对应的虚拟节点
 			hash := int(m.hash([]byte(strconv.FormatInt(int64(i), 10) + key)))
 			m.keys = append(m.keys, hash)
+			// 虚拟节点对应真正的节点
 			m.hashMap[hash] = key
 		}
 	}
