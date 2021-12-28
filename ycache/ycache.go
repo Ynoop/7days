@@ -3,6 +3,7 @@ package ycache
 import (
 	"context"
 	"errors"
+	"log"
 	"sync"
 )
 
@@ -19,11 +20,12 @@ func (f GetterFunc) Get(ctx context.Context, key string) ([]byte, error) {
 	return f(ctx, key)
 }
 
-// Group 每个group都是cache的命名空间，允许加载的数据存放在各处
+// Group 每个group都是cache的命名空间，并加载相关数据
 type Group struct {
 	name      string
 	getter    Getter
 	mainCache cache
+	peers     PeerPicker
 }
 
 var (
@@ -66,6 +68,7 @@ func (g *Group) Get(ctx context.Context, key string) (ByteView, error) {
 
 	// 缓存中获取
 	if value, hit := g.mainCache.get(key); hit {
+		log.Println("[ycache] mainCache.get hit")
 		return value, nil
 	}
 
@@ -73,8 +76,28 @@ func (g *Group) Get(ctx context.Context, key string) (ByteView, error) {
 	return g.load(ctx, key)
 }
 
+// RegisterPeers 注册一个远程选择的分布式节点
+func (g *Group) RegisterPeers(peers PeerPicker) {
+	if g.peers != nil {
+		panic("RegisterPeers called more than once")
+	}
+
+	g.peers = peers
+}
+
 // 加载数据
-func (g *Group) load(ctx context.Context, key string) (ByteView, error) {
+func (g *Group) load(ctx context.Context, key string) (value ByteView, err error) {
+	if g.peers != nil {
+		// 如果有远程节点。从远程节点中加载数据
+		if peer, ok := g.peers.PickPeer(key); ok {
+			if value, err = g.getFromPeer(ctx, peer, key); err == nil {
+				return value, nil
+			}
+
+			log.Println("[YCache] Failed to get from peer", err)
+		}
+	}
+
 	return g.getLocally(ctx, key)
 }
 
@@ -94,4 +117,13 @@ func (g *Group) getLocally(ctx context.Context, key string) (ByteView, error) {
 // 把数据插入至缓存中
 func (g *Group) populateCache(key string, value ByteView) {
 	g.mainCache.add(key, value)
+}
+
+func (g *Group) getFromPeer(ctx context.Context, peer PeerGetter, key string) (ByteView, error) {
+	bytes, err := peer.Get(ctx, g.name, key)
+	if err != nil {
+		return ByteView{}, err
+	}
+
+	return ByteView{data: bytes}, nil
 }
