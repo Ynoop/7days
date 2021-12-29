@@ -1,6 +1,8 @@
 package ycache
 
 import (
+	"7days/ycache/singleflight"
+	pb "7days/ycache/ycachepb"
 	"context"
 	"errors"
 	"log"
@@ -26,6 +28,9 @@ type Group struct {
 	getter    Getter
 	mainCache cache
 	peers     PeerPicker
+
+	// use singleflight.Group to make sure that eache key is only fetched once
+	loader *singleflight.Group
 }
 
 var (
@@ -46,6 +51,7 @@ func NewGroup(name string, cacheBytes int, getter Getter) *Group {
 		name:      name,
 		getter:    getter,
 		mainCache: cache{cacheBytes: cacheBytes},
+		loader:    &singleflight.Group{},
 	}
 
 	groups[name] = g
@@ -87,18 +93,28 @@ func (g *Group) RegisterPeers(peers PeerPicker) {
 
 // 加载数据
 func (g *Group) load(ctx context.Context, key string) (value ByteView, err error) {
-	if g.peers != nil {
-		// 如果有远程节点。从远程节点中加载数据
-		if peer, ok := g.peers.PickPeer(key); ok {
-			if value, err = g.getFromPeer(ctx, peer, key); err == nil {
-				return value, nil
-			}
+	// each key is only fetched once (either locally or remotely)
+	// regardless of the number of concurrent callers.
+	view, err := g.loader.Do(key, func() (interface{}, error) {
+		if g.peers != nil {
+			// 如果有远程节点。从远程节点中加载数据
+			if peer, ok := g.peers.PickPeer(key); ok {
+				if value, err = g.getFromPeer(ctx, peer, key); err == nil {
+					return value, nil
+				}
 
-			log.Println("[YCache] Failed to get from peer", err)
+				log.Println("[YCache] Failed to get from peer", err)
+			}
 		}
+
+		return g.getLocally(ctx, key)
+	})
+
+	if err == nil {
+		return view.(ByteView), err
 	}
 
-	return g.getLocally(ctx, key)
+	return
 }
 
 // 从回调函数中加入数据
@@ -120,10 +136,15 @@ func (g *Group) populateCache(key string, value ByteView) {
 }
 
 func (g *Group) getFromPeer(ctx context.Context, peer PeerGetter, key string) (ByteView, error) {
-	bytes, err := peer.Get(ctx, g.name, key)
+	req := &pb.Request{
+		Group: g.name,
+		Key:   key,
+	}
+	resp := &pb.Response{}
+	err := peer.Get(ctx, req, resp)
 	if err != nil {
 		return ByteView{}, err
 	}
 
-	return ByteView{data: bytes}, nil
+	return ByteView{data: resp.Value}, nil
 }
